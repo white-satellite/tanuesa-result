@@ -53,6 +53,11 @@ type Settings struct {
     DiscordArchiveOldSummary bool `json:"discordArchiveOldSummary"`
     DiscordArchiveLabel string `json:"discordArchiveLabel"`
     DiscordTitle string `json:"discordTitle"`
+    DiscordEmojiDone string `json:"discordEmojiDone"`
+    DiscordEmojiProgress string `json:"discordEmojiProgress"`
+    DiscordEmojiNone string `json:"discordEmojiNone"`
+    DiscordHeaderGif string `json:"discordHeaderGif"`
+    DiscordHeaderIllustration string `json:"discordHeaderIllustration"`
 }
 
 type Event struct {
@@ -792,24 +797,36 @@ func buildLatestSummaryEmbed(st State, cfg Settings) DiscordEmbed {
     for _, u := range st.Users {
         present := strings.TrimSpace(u.Present)
         if present == "" {
-            if u.Flags.Gif { present = "Gif" } else if u.Flags.Illust { present = "イラスト" }
+            if u.Flags.Gif { present = "Gif" } else if u.Flags.Illust { present = "Illustration" }
         }
+        // status emoji from settings (fallback to defaults)
+        eNone := cfg.DiscordEmojiNone
+        if strings.TrimSpace(eNone) == "" { eNone = "⏳" }
+        eProg := cfg.DiscordEmojiProgress
+        if strings.TrimSpace(eProg) == "" { eProg = "🎨" }
+        eDone := cfg.DiscordEmojiDone
+        if strings.TrimSpace(eDone) == "" { eDone = "✅" }
+
         if present == "Gif" {
-            prefix := "⏳ "
-            if u.Status == "progress" { prefix = "🔄 " }
-            if u.Done || u.Status == "done" { prefix = "✅ " }
+            prefix := eNone + " "
+            if u.Status == "progress" { prefix = eProg + " " }
+            if u.Done || u.Status == "done" { prefix = eDone + " " }
             gifs = append(gifs, prefix+u.Name)
-        } else if present == "イラスト" {
-            prefix := "⏳ "
-            if u.Status == "progress" { prefix = "🔄 " }
-            if u.Done || u.Status == "done" { prefix = "✅ " }
+        } else if present == "Illustration" {
+            prefix := eNone + " "
+            if u.Status == "progress" { prefix = eProg + " " }
+            if u.Done || u.Status == "done" { prefix = eDone + " " }
             ilsts = append(ilsts, prefix+u.Name)
         }
     }
     sort.Strings(gifs)
     sort.Strings(ilsts)
-    fieldGif := EmbedField{Name: "---大当たり（Gif）---", Value: "なし", Inline: false}
-    fieldIlst := EmbedField{Name: "---当たり（イラスト）---", Value: "なし", Inline: false}
+    gh := cfg.DiscordHeaderGif
+    if strings.TrimSpace(gh) == "" { gh = "---大当たり（Gif）---" }
+    ih := cfg.DiscordHeaderIllustration
+    if strings.TrimSpace(ih) == "" { ih = "---当たり（イラスト）---" }
+    fieldGif := EmbedField{Name: gh, Value: "なし", Inline: false}
+    fieldIlst := EmbedField{Name: ih, Value: "なし", Inline: false}
     if len(gifs) > 0 { fieldGif.Value = strings.Join(gifs, "\n") }
     if len(ilsts) > 0 { fieldIlst.Value = strings.Join(ilsts, "\n") }
     // Tailwind emerald-500
@@ -1002,7 +1019,7 @@ func hasArchiveHeader(content string, cfg Settings) bool {
     return strings.Contains(first, base)
 }
 
-func defaultSettings() Settings { return Settings{EventJSONLog: false, AutoServe: true, ServerPort: 3010, DiscordEnabled: true, DiscordNewMessagePerSession: true, DiscordArchiveOldSummary: true, DiscordArchiveLabel: "アーカイブ", DiscordTitle: "集計（最新）"} }
+func defaultSettings() Settings { return Settings{EventJSONLog: false, AutoServe: true, ServerPort: 3010, DiscordEnabled: true, DiscordNewMessagePerSession: true, DiscordArchiveOldSummary: true, DiscordArchiveLabel: "アーカイブ", DiscordTitle: "集計（最新）", DiscordEmojiDone: "✅", DiscordEmojiProgress: "🎨", DiscordEmojiNone: "⏳", DiscordHeaderGif: "---大当たり（Gif）---", DiscordHeaderIllustration: "---当たり（イラスト）---"} }
 
 func ensureSettingsExists(base string) error {
     p := settingsPath(base)
@@ -1054,6 +1071,26 @@ func ensureSettingsUpgraded(base string) error {
     }
     if _, ok := raw["discordArchiveLabel"]; !ok {
         raw["discordArchiveLabel"] = "アーカイブ"
+        changed = true
+    }
+    if _, ok := raw["discordEmojiDone"]; !ok {
+        raw["discordEmojiDone"] = "✅"
+        changed = true
+    }
+    if _, ok := raw["discordEmojiProgress"]; !ok {
+        raw["discordEmojiProgress"] = "🎨"
+        changed = true
+    }
+    if _, ok := raw["discordEmojiNone"]; !ok {
+        raw["discordEmojiNone"] = "⏳"
+        changed = true
+    }
+    if _, ok := raw["discordHeaderGif"]; !ok {
+        raw["discordHeaderGif"] = "---大当たり（Gif）---"
+        changed = true
+    }
+    if _, ok := raw["discordHeaderIllustration"]; !ok {
+        raw["discordHeaderIllustration"] = "---当たり（イラスト）---"
         changed = true
     }
     if changed {
