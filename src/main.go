@@ -34,6 +34,7 @@ type User struct {
     Order   int    `json:"order"`
     Status  string `json:"status"`
     Present string `json:"present"`
+    HasReference bool `json:"hasReference"`
 }
 
 type State struct {
@@ -708,6 +709,42 @@ func serve(base string, port int) error {
         }
         writeJSON(w, r, map[string]any{"ok": true}, 200)
     })
+    // toggle reference image flag
+    mux.HandleFunc("/api/user/ref", func(w http.ResponseWriter, r *http.Request) {
+        if r.Method == http.MethodOptions { setCORS(w, r); w.WriteHeader(204); return }
+        if r.Method != http.MethodPost { writeJSON(w, r, map[string]any{"ok": false, "error": "method"}, 405); return }
+        var req struct{ Name string `json:"name"`; HasReference bool `json:"hasReference"` }
+        if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeJSON(w, r, map[string]any{"ok": false, "error": "bad json"}, 400); return }
+        st, err := loadState(base)
+        if err != nil { writeJSON(w, r, map[string]any{"ok": false, "error": err.Error()}, 500); return }
+        found := false
+        for i := range st.Users {
+            if st.Users[i].Name == req.Name {
+                st.Users[i].HasReference = req.HasReference
+                found = true
+                break
+            }
+        }
+        if !found { writeJSON(w, r, map[string]any{"ok": false, "error": "not found"}, 404); return }
+        st.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+        if err := saveState(base, st); err != nil { writeJSON(w, r, map[string]any{"ok": false, "error": err.Error()}, 500); return }
+        if err := genDataJS(base); err != nil { writeJSON(w, r, map[string]any{"ok": false, "error": err.Error()}, 500); return }
+        // refresh discord summary
+        cfg := loadSettings(base)
+        if cfg.DiscordEnabled || isTruthy(os.Getenv("DISCORD_NOTIFY")) {
+            embed := buildLatestSummaryEmbed(st, cfg)
+            payload := DiscordMessage{Embeds: []DiscordEmbed{embed}}
+            sess, _ := ensureSession(base)
+            key := "__SUMMARY__"
+            if cfg.DiscordNewMessagePerSession && sess.ID != "" { key = key+"::"+sess.ID }
+            if t := strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN")); t != "" && strings.TrimSpace(os.Getenv("DISCORD_CHANNEL_ID")) != "" {
+                _ = discordBotUpsertEmbed(base, t, os.Getenv("DISCORD_CHANNEL_ID"), key, payload)
+            } else if u := strings.TrimSpace(os.Getenv("DISCORD_WEBHOOK_URL")); u != "" {
+                _ = discordUpsertEmbed(base, u, key, payload)
+            }
+        }
+        writeJSON(w, r, map[string]any{"ok": true}, 200)
+    })
     mux.HandleFunc("/api/gen-backup-index", func(w http.ResponseWriter, r *http.Request) {
         if r.Method == http.MethodOptions { setCORS(w, r); w.WriteHeader(204); return }
         if err := genBackupIndex(base); err != nil { writeJSON(w, r, map[string]any{"ok": false, "error": err.Error()}, 500); return }
@@ -807,16 +844,27 @@ func buildLatestSummaryEmbed(st State, cfg Settings) DiscordEmbed {
         eDone := cfg.DiscordEmojiDone
         if strings.TrimSpace(eDone) == "" { eDone = "✅" }
 
+        // status emoji from settings (fallback to defaults)
+        eNone := cfg.DiscordEmojiNone
+        if strings.TrimSpace(eNone) == "" { eNone = "⏳" }
+        eProg := cfg.DiscordEmojiProgress
+        if strings.TrimSpace(eProg) == "" { eProg = "🎨" }
+        eDone := cfg.DiscordEmojiDone
+        if strings.TrimSpace(eDone) == "" { eDone = "✅" }
+        // reference note
+        ref := " [参考画像なし]"
+        if u.HasReference { ref = " [参考画像あり]" }
+
         if present == "Gif" {
             prefix := eNone + " "
             if u.Status == "progress" { prefix = eProg + " " }
             if u.Done || u.Status == "done" { prefix = eDone + " " }
-            gifs = append(gifs, prefix+u.Name)
+            gifs = append(gifs, prefix+u.Name+ref)
         } else if present == "Illustration" {
             prefix := eNone + " "
             if u.Status == "progress" { prefix = eProg + " " }
             if u.Done || u.Status == "done" { prefix = eDone + " " }
-            ilsts = append(ilsts, prefix+u.Name)
+            ilsts = append(ilsts, prefix+u.Name+ref)
         }
     }
     sort.Strings(gifs)
@@ -1118,6 +1166,8 @@ func migrateCurrentJSON(base string) error {
             if pv, ok := m["present"].(string); ok {
                 if pv == "イラスト" { m["present"] = "Illustration"; changed = true }
             }
+            // ensure hasReference exists (default false)
+            if _, ok := m["hasReference"]; !ok { m["hasReference"] = false; changed = true }
         }
     }
     if changed {
