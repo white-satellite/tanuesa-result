@@ -1,0 +1,32 @@
+# Build artifacts
+/gacha.exe
+/gacha
+
+# App data
+/data/
+/logs/
+/backups/
+
+# Keep directory placeholders
+!/data/.gitkeep
+!/logs/.gitkeep
+!/backups/.gitkeep
+
+# OS/Editor junk
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
+
+# Local toolchain cache
+/.tools/
+
+# Dist artifacts
+/dist/
+/scripts/dist/
+
+# Local env
+/.env.local
+
+/tools/
+/twitch配信ガチャ集計システム_rfp.md

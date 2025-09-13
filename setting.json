@@ -1,0 +1,9 @@
+{
+  "autoServe": true,
+  "discordArchiveLabel": "[アーカイブ]",
+  "discordArchiveOldSummary": true,
+  "discordEnabled": true,
+  "discordNewMessagePerSession": true,
+  "eventJsonLog": false,
+  "serverPort": 3010
+}
