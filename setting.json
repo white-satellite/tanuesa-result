@@ -2,7 +2,12 @@
   "autoServe": true,
   "discordArchiveLabel": "[アーカイブ]",
   "discordArchiveOldSummary": true,
+  "discordEmojiDone": "✅",
+  "discordEmojiNone": "⏳",
+  "discordEmojiProgress": "🎨",
   "discordEnabled": true,
+  "discordHeaderGif": "---大当たり（Gif）---",
+  "discordHeaderIllustration": "---当たり（イラスト）---",
   "discordNewMessagePerSession": true,
   "eventJsonLog": false,
   "serverPort": 3010

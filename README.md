@@ -85,6 +85,16 @@
 - 旧メッセージはアーカイブ扱いとして、先頭に見出しを付与します（`discordArchiveOldSummary`）。
   - 見出し例: `[アーカイブ 2025/09/13 12:34]`（`discordArchiveLabel` と現在日時から自動生成、日本語表記）
 
+### Embedのカスタマイズ
+- タイトル: `discordTitle`（既定: 集計（最新））
+- フィールド見出し:
+  - `discordHeaderGif`（既定: `---大当たり（Gif）---`）
+  - `discordHeaderIllustration`（既定: `---当たり（イラスト）---`）
+- ステータス絵文字:
+  - `discordEmojiDone`（既定: ✅）
+  - `discordEmojiProgress`（既定: 🎨）
+  - `discordEmojiNone`（既定: ⏳）
+
 ## ショートカット（バッチ）
 - `scripts\reset.bat` リセット（バックアップ→初期化）
  - `scripts\serve_api.bat [port]` ローカルAPIサーバー起動（既定: 3010）
