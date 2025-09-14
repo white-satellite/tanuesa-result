@@ -5,6 +5,8 @@
   "discordEmojiDone": "✅",
   "discordEmojiNone": "⏳",
   "discordEmojiProgress": "🎨",
+  "discordRefLabelYes": "●",
+  "discordRefLabelNo": "○",
   "discordEnabled": true,
   "discordHeaderGif": "---大当たり（Gif）---",
   "discordHeaderIllustration": "---当たり（イラスト）---",

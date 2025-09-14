@@ -406,6 +406,7 @@
     .col-num{ min-width: 72px; width: 80px; }
     .col-flag{ min-width: 70px; width: 80px; }
     .col-present{ min-width: 100px; width: 120px; }
+    .col-ref{ min-width: 90px; width: 100px; }
 
     /* Focus table mode */
     html.focus-table .nav{ display:none; }
@@ -417,6 +418,13 @@
       background: var(--card);
     }
     html.focus-table .table-wrap{ padding: 12px; }
+    
+    /* Reference checkbox styling */
+    .ref-checkbox {
+      transform: scale(1.2);
+      cursor: pointer;
+      accent-color: var(--accent);
+    }
     
     /* Responsive improvements */
     @media (max-width: 768px) {
@@ -430,7 +438,7 @@
     }
   </style>
   <script>
-    const STATE = { refreshMs: 4000, refreshTimer: null, paused: false, sortKey: 'order', sortDir: 'asc', query: '', view: 'current', backups: [], backupData: null, backupName: '' };
+    const STATE = { refreshMs: 4000, refreshTimer: null, paused: false, sortKey: 'order', sortDir: 'asc', query: '', view: 'current', backups: [], backupData: null, backupName: '', augmentedOnce: false, cfg: { emojiNone: '⏳', emojiProgress: '🎨', emojiDone: '✅', refLabelYes: '参考画像あり', refLabelNo: '参考画像なし' } };
 
     const Theme = {
       load(){ return localStorage.getItem('theme') || 'auto'; },
@@ -452,6 +460,7 @@
       // Remove previous script tag to avoid leaking
       const old = document.getElementById('dataScript'); if(old) old.remove();
       delete window.__GACHA_DATA__;
+      STATE.augmentedOnce = false;
       const s = document.createElement('script');
       s.id = 'dataScript';
       s.src = `../data/data.js?cb=${Date.now()}`;
@@ -469,6 +478,22 @@
       s.onload = ()=>{ STATE.backups = Array.isArray(window.__GACHA_BACKUPS__) ? window.__GACHA_BACKUPS__ : []; populateBackupSelect(); };
       s.onerror = ()=>{ console.warn('backups/index.js not found'); STATE.backups = []; populateBackupSelect(); };
       document.head.appendChild(s);
+    }
+
+    function loadSettings(){
+      try {
+        fetch('http://127.0.0.1:3010/api/settings').then(r=>r.ok?r.json():null).then(js=>{
+          if(js){
+            STATE.cfg.emojiNone = js.emojiNone || STATE.cfg.emojiNone;
+            STATE.cfg.emojiProgress = js.emojiProgress || STATE.cfg.emojiProgress;
+            STATE.cfg.emojiDone = js.emojiDone || STATE.cfg.emojiDone;
+            STATE.cfg.refLabelYes = js.refLabelYes || STATE.cfg.refLabelYes;
+            STATE.cfg.refLabelNo = js.refLabelNo || STATE.cfg.refLabelNo;
+            // 再描画
+            if (document.getElementById('dataScript')) render();
+          }
+        }).catch(()=>{});
+      } catch(_e) {}
     }
 
     function populateBackupSelect(){
@@ -501,6 +526,25 @@
 
     function render(){
       const base = (STATE.view==='backup' && STATE.backupData) ? STATE.backupData : (window.__GACHA_DATA__ || { users: [], updatedAt: null });
+      // 互換: data.js に hasReference がない環境では API/state で補完（1回だけ試行）
+      if (!STATE.augmentedOnce && base && Array.isArray(base.users) && base.users.some(u=> typeof u.hasReference === 'undefined')) {
+        STATE.augmentedOnce = true;
+        try {
+          fetch('http://127.0.0.1:3010/api/state').then(r=>r.ok?r.json():null).then(js=>{
+            if(js && Array.isArray(js.users)){
+              const map = Object.create(null);
+              for(const u of js.users){ map[String(u.name)] = !!u.hasReference; }
+              if(Array.isArray(base.users)){
+                for(const u of base.users){ if (typeof u.hasReference === 'undefined') u.hasReference = !!map[String(u.name)]; }
+                // 再描画
+                window.__GACHA_DATA__ = base; // 反映
+                render();
+                return;
+              }
+            }
+          }).catch(()=>{});
+        } catch(_e) {}
+      }
       document.querySelector('#updated').textContent = base.updatedAt ? new Date(base.updatedAt).toLocaleString() : '-';
       const summary = computeSummary(base);
       const su = document.querySelector('#sumUsers'); if (su) su.textContent = summary.users;
@@ -530,6 +574,11 @@
           const av = (a.present|| (a?.flags?.gif?'Gif':(a?.flags?.illust?'Illustration':'')))||'';
           const bv = (b.present|| (b?.flags?.gif?'Gif':(b?.flags?.illust?'Illustration':'')))||'';
           return dir * String(av).localeCompare(String(bv), 'ja');
+        } else if (k==='hasReference') {
+          const av = a.hasReference ? 1 : 0;
+          const bv = b.hasReference ? 1 : 0;
+          if(av===bv) return String(a.name).localeCompare(String(b.name), 'ja');
+          return dir * (bv - av);
         } else {
           const av = (a[k]||0), bv = (b[k]||0);
           if(av===bv){
@@ -544,9 +593,12 @@
       tbody.innerHTML = '';
       if(users.length===0){
         const tr = document.createElement('tr');
-        const td = document.createElement('td'); td.colSpan=6; td.className='empty'; td.innerHTML='<i class="fas fa-inbox"></i><br>データがありません'; tr.appendChild(td); tbody.appendChild(tr);
+        const td = document.createElement('td'); td.colSpan=7; td.className='empty'; td.innerHTML='<i class="fas fa-inbox"></i><br>データがありません'; tr.appendChild(td); tbody.appendChild(tr);
         return;
       }
+      const eNone = STATE.cfg.emojiNone || '⏳';
+      const eProg = STATE.cfg.emojiProgress || '🎨';
+      const eDone = STATE.cfg.emojiDone || '✅';
       for(const u of users){
         const tr = document.createElement('tr');
         const st = (u.status||'').toLowerCase();
@@ -554,19 +606,23 @@
         const progCk = st==='progress';
         const checkedDone = doneCk ? 'checked' : '';
         const checkedProg = progCk ? 'checked' : '';
+        const hasRef = u.hasReference || false;
         tr.innerHTML = `
           <td class="num right">${u.order||''}</td>
           <td class="center">
-            <select class="statusSel" data-name="${escapeHtml(u.name)}">
-              <option value="none" ${(!doneCk&&!progCk)?'selected':''}>⚪ 未</option>
-              <option value="progress" ${(progCk)?'selected':''}>🎨 進行中</option>
-              <option value="done" ${(doneCk)?'selected':''}>✅ 完了</option>
+            <select class="statusSel" data-name="${escapeHtml(u.name)}" id="${safeId('status-'+u.name)}" name="status-${escapeHtml(u.name)}">
+              <option value="none" ${(!doneCk&&!progCk)?'selected':''}>${eNone} 未</option>
+              <option value="progress" ${(progCk)?'selected':''}>${eProg} 進行中</option>
+              <option value="done" ${(doneCk)?'selected':''}>${eDone} 完了</option>
             </select>
           </td>
           <td class="left">${escapeHtml(u.name)}</td>
           <td class="num right">${u.hit|0}</td>
           <td class="num right">${u.jackpot|0}</td>
-          <td class="center col-present">${(()=>{ const p=u.present|| (u?.flags?.gif?'Gif':(u?.flags?.illust?'Illustration':'')); if(p==='Gif') return '<span class="badge ok"><i class="fas fa-video"></i> Gif</span>'; if(p==='Illustration') return '<span class="badge illustration"><i class="fas fa-image"></i> イラスト</span>'; return '<span class="badge no"><i class="fas fa-minus"></i></span>'; })()}</td>`;
+          <td class="center col-present">${(()=>{ const p=u.present|| (u?.flags?.gif?'Gif':(u?.flags?.illust?'Illustration':'')); if(p==='Gif') return '<span class="badge ok"><i class="fas fa-video"></i> Gif</span>'; if(p==='Illustration') return '<span class="badge illustration"><i class="fas fa-image"></i> イラスト</span>'; return '<span class="badge no"><i class="fas fa-minus"></i></span>'; })()}</td>
+          <td class="center col-ref">
+            <input type="checkbox" class="ref-checkbox" data-name="${escapeHtml(u.name)}" id="${safeId('ref-'+u.name)}" name="ref-${escapeHtml(u.name)}" ${hasRef?'checked':''} />
+          </td>`;
         tbody.appendChild(tr);
       }
       // attach status select handlers
@@ -584,11 +640,27 @@
           }).finally(()=>{ loadData(); });
         });
       });
+      // attach reference checkbox handlers
+      document.querySelectorAll('.ref-checkbox').forEach(cb=>{
+        cb.addEventListener('change', (e)=>{
+          const el = e.currentTarget;
+          const name = el.getAttribute('data-name');
+          const hasReference = el.checked;
+          fetch('http://127.0.0.1:3010/api/user/ref', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({name, hasReference})
+          }).then(r=>{ if(!r.ok) throw new Error('api'); }).catch(()=>{
+            alert('更新できませんでした。APIを起動してください（scripts/serve_api.bat）。');
+            el.checked = !hasReference; // revert on error
+          }).finally(()=>{ loadData(); });
+        });
+      });
       updateSortIndicators();
       adjustTableMaxHeight();
     }
 
     function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]))}
+    function safeId(s){return 'id-' + String(s).toLowerCase().replace(/[^a-z0-9_-]+/gi,'-').replace(/^-+|-+$/g,'');}
 
     function updateSort(key){
       if(STATE.sortKey===key){ STATE.sortDir = (STATE.sortDir==='asc')? 'desc':'asc'; }
@@ -596,7 +668,7 @@
       render();
     }
     function updateSortIndicators(){
-      const cols = ['order','status','name','hit','jackpot','present'];
+      const cols = ['order','status','name','hit','jackpot','present','hasReference'];
       for(const k of cols){
         const th = document.querySelector(`th[data-key="${k}"] .dir`);
         if(!th) continue;
@@ -657,6 +729,7 @@
           });
         }
       }
+      loadSettings();
       loadData(); loadBackupList(); startAuto();
       window.addEventListener('resize', adjustTableMaxHeight);
     });
@@ -719,6 +792,7 @@
               <th class="sort right col-num" data-key="hit"><i class="fas fa-star"></i> 当たり <span class="dir">↕</span></th>
               <th class="sort right col-num" data-key="jackpot"><i class="fas fa-gem"></i> 大当たり <span class="dir">↕</span></th>
               <th class="sort center col-present" data-key="present"><i class="fas fa-gift"></i> プレゼント <span class="dir">↕</span></th>
+              <th class="sort center col-ref" data-key="hasReference"><i class="fas fa-image"></i> 参考画像 <span class="dir">↕</span></th>
             </tr>
           </thead>
           <tbody></tbody>

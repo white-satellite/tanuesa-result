@@ -34,6 +34,7 @@ type User struct {
     Order   int    `json:"order"`
     Status  string `json:"status"`
     Present string `json:"present"`
+    HasReference bool `json:"hasReference"`
 }
 
 type State struct {
@@ -58,6 +59,8 @@ type Settings struct {
     DiscordEmojiNone string `json:"discordEmojiNone"`
     DiscordHeaderGif string `json:"discordHeaderGif"`
     DiscordHeaderIllustration string `json:"discordHeaderIllustration"`
+    DiscordRefLabelYes string `json:"discordRefLabelYes"`
+    DiscordRefLabelNo  string `json:"discordRefLabelNo"`
 }
 
 type Event struct {
@@ -417,14 +420,15 @@ func genDataJS(base string) error {
     }
     // Build ASCII-only export structure for data.js
     type userOut struct {
-        Name    string `json:"name"`
-        Hit     int    `json:"hit"`
-        Jackpot int    `json:"jackpot"`
-        Flags   Flags  `json:"flags"`
-        Done    bool   `json:"done"`
-        Order   int    `json:"order"`
-        Status  string `json:"status"`
-        Present string `json:"present"`
+        Name         string `json:"name"`
+        Hit          int    `json:"hit"`
+        Jackpot      int    `json:"jackpot"`
+        Flags        Flags  `json:"flags"`
+        Done         bool   `json:"done"`
+        Order        int    `json:"order"`
+        Status       string `json:"status"`
+        Present      string `json:"present"`
+        HasReference bool   `json:"hasReference"`
     }
     type out struct {
         Users     []userOut `json:"users"`
@@ -439,6 +443,7 @@ func genDataJS(base string) error {
         o.Users = append(o.Users, userOut{
             Name: u.Name, Hit: u.Hit, Jackpot: u.Jackpot, Flags: u.Flags,
             Done: u.Done, Order: u.Order, Status: u.Status, Present: po,
+            HasReference: u.HasReference,
         })
     }
     payload, err := json.Marshal(o)
@@ -630,15 +635,14 @@ func fatal(err error) {
 func serve(base string, port int) error {
     mux := http.NewServeMux()
     setCORS := func(w http.ResponseWriter, r *http.Request) {
-        origin := r.Header.Get("Origin")
-        if origin == "" { origin = "*" }
-        w.Header().Set("Access-Control-Allow-Origin", origin)
+        // 開発ローカル用途のため、常にワイルドカード許可（credentials不使用）
+        w.Header().Set("Access-Control-Allow-Origin", "*")
+        // プリフライトで明示されたヘッダを尊重しつつ、デフォルトで Content-Type を許可
         reqH := r.Header.Get("Access-Control-Request-Headers")
-        if reqH == "" { reqH = "Content-Type" }
+        if strings.TrimSpace(reqH) == "" { reqH = "Content-Type" }
         w.Header().Set("Access-Control-Allow-Headers", reqH)
-        reqM := r.Header.Get("Access-Control-Request-Method")
-        if reqM == "" { reqM = "GET,POST,PATCH,OPTIONS" }
-        w.Header().Set("Access-Control-Allow-Methods", reqM)
+        // 許可メソッドを固定で提示（POST/GET/PATCH/OPTIONS）
+        w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PATCH,OPTIONS")
         w.Header().Set("Access-Control-Max-Age", "600")
     }
     writeJSON := func(w http.ResponseWriter, r *http.Request, v interface{}, code int) {
@@ -663,6 +667,23 @@ func serve(base string, port int) error {
         st, err := loadState(base)
         if err != nil { writeJSON(w, r, map[string]any{"ok": false, "error": err.Error()}, 500); return }
         writeJSON(w, r, st, 200)
+    })
+    mux.HandleFunc("/api/settings", func(w http.ResponseWriter, r *http.Request) {
+        if r.Method == http.MethodOptions { setCORS(w, r); w.WriteHeader(204); return }
+        cfg := loadSettings(base)
+        // sanitize and provide fallbacks
+        eNone := strings.TrimSpace(cfg.DiscordEmojiNone); if eNone == "" { eNone = "⏳" }
+        eProg := strings.TrimSpace(cfg.DiscordEmojiProgress); if eProg == "" { eProg = "🎨" }
+        eDone := strings.TrimSpace(cfg.DiscordEmojiDone); if eDone == "" { eDone = "✅" }
+        refYes := strings.TrimSpace(cfg.DiscordRefLabelYes); if refYes == "" { refYes = "参考画像あり" }
+        refNo := strings.TrimSpace(cfg.DiscordRefLabelNo); if refNo == "" { refNo = "参考画像なし" }
+        writeJSON(w, r, map[string]any{
+            "emojiNone": eNone,
+            "emojiProgress": eProg,
+            "emojiDone": eDone,
+            "refLabelYes": refYes,
+            "refLabelNo": refNo,
+        }, 200)
     })
     mux.HandleFunc("/api/reset", func(w http.ResponseWriter, r *http.Request) {
         if r.Method == http.MethodOptions { setCORS(w, r); w.WriteHeader(204); return }
@@ -697,6 +718,42 @@ func serve(base string, port int) error {
             embed := buildLatestSummaryEmbed(st, cfg)
             payload := DiscordMessage{Embeds: []DiscordEmbed{embed}}
             // build key
+            sess, _ := ensureSession(base)
+            key := "__SUMMARY__"
+            if cfg.DiscordNewMessagePerSession && sess.ID != "" { key = key+"::"+sess.ID }
+            if t := strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN")); t != "" && strings.TrimSpace(os.Getenv("DISCORD_CHANNEL_ID")) != "" {
+                _ = discordBotUpsertEmbed(base, t, os.Getenv("DISCORD_CHANNEL_ID"), key, payload)
+            } else if u := strings.TrimSpace(os.Getenv("DISCORD_WEBHOOK_URL")); u != "" {
+                _ = discordUpsertEmbed(base, u, key, payload)
+            }
+        }
+        writeJSON(w, r, map[string]any{"ok": true}, 200)
+    })
+    // toggle reference image flag
+    mux.HandleFunc("/api/user/ref", func(w http.ResponseWriter, r *http.Request) {
+        if r.Method == http.MethodOptions { setCORS(w, r); w.WriteHeader(204); return }
+        if r.Method != http.MethodPost { writeJSON(w, r, map[string]any{"ok": false, "error": "method"}, 405); return }
+        var req struct{ Name string `json:"name"`; HasReference bool `json:"hasReference"` }
+        if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeJSON(w, r, map[string]any{"ok": false, "error": "bad json"}, 400); return }
+        st, err := loadState(base)
+        if err != nil { writeJSON(w, r, map[string]any{"ok": false, "error": err.Error()}, 500); return }
+        found := false
+        for i := range st.Users {
+            if st.Users[i].Name == req.Name {
+                st.Users[i].HasReference = req.HasReference
+                found = true
+                break
+            }
+        }
+        if !found { writeJSON(w, r, map[string]any{"ok": false, "error": "not found"}, 404); return }
+        st.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+        if err := saveState(base, st); err != nil { writeJSON(w, r, map[string]any{"ok": false, "error": err.Error()}, 500); return }
+        if err := genDataJS(base); err != nil { writeJSON(w, r, map[string]any{"ok": false, "error": err.Error()}, 500); return }
+        // refresh discord summary
+        cfg := loadSettings(base)
+        if cfg.DiscordEnabled || isTruthy(os.Getenv("DISCORD_NOTIFY")) {
+            embed := buildLatestSummaryEmbed(st, cfg)
+            payload := DiscordMessage{Embeds: []DiscordEmbed{embed}}
             sess, _ := ensureSession(base)
             key := "__SUMMARY__"
             if cfg.DiscordNewMessagePerSession && sess.ID != "" { key = key+"::"+sess.ID }
@@ -770,7 +827,16 @@ func serve(base string, port int) error {
 
     addr := fmt.Sprintf("127.0.0.1:%d", port)
     fmt.Println("serve: listening on http://" + addr)
-    return http.ListenAndServe(addr, mux)
+    // すべてのリクエストにCORSヘッダを適用し、未登録パスでもプリフライトに応答
+    handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        setCORS(w, r)
+        if r.Method == http.MethodOptions {
+            w.WriteHeader(204)
+            return
+        }
+        mux.ServeHTTP(w, r)
+    })
+    return http.ListenAndServe(addr, handler)
 }
 
 func ensureAPISpawned(base string, port int) {
@@ -806,17 +872,26 @@ func buildLatestSummaryEmbed(st State, cfg Settings) DiscordEmbed {
         if strings.TrimSpace(eProg) == "" { eProg = "🎨" }
         eDone := cfg.DiscordEmojiDone
         if strings.TrimSpace(eDone) == "" { eDone = "✅" }
+        // reference note (先に表示) ※行フォーマット: 絵文字 + [参考画像○] + ユーザー名
+        yes := strings.TrimSpace(cfg.DiscordRefLabelYes)
+        no := strings.TrimSpace(cfg.DiscordRefLabelNo)
+        if yes == "" { yes = "参考画像あり" }
+        if no == "" { no = "参考画像なし" }
+        refTag := "[" + no + "]"
+        if u.HasReference { refTag = "[" + yes + "]" }
 
         if present == "Gif" {
             prefix := eNone + " "
             if u.Status == "progress" { prefix = eProg + " " }
             if u.Done || u.Status == "done" { prefix = eDone + " " }
-            gifs = append(gifs, prefix+u.Name)
+            line := prefix + refTag + " " + u.Name
+            gifs = append(gifs, line)
         } else if present == "Illustration" {
             prefix := eNone + " "
             if u.Status == "progress" { prefix = eProg + " " }
             if u.Done || u.Status == "done" { prefix = eDone + " " }
-            ilsts = append(ilsts, prefix+u.Name)
+            line := prefix + refTag + " " + u.Name
+            ilsts = append(ilsts, line)
         }
     }
     sort.Strings(gifs)
@@ -1019,7 +1094,25 @@ func hasArchiveHeader(content string, cfg Settings) bool {
     return strings.Contains(first, base)
 }
 
-func defaultSettings() Settings { return Settings{EventJSONLog: false, AutoServe: true, ServerPort: 3010, DiscordEnabled: true, DiscordNewMessagePerSession: true, DiscordArchiveOldSummary: true, DiscordArchiveLabel: "アーカイブ", DiscordTitle: "集計（最新）", DiscordEmojiDone: "✅", DiscordEmojiProgress: "🎨", DiscordEmojiNone: "⏳", DiscordHeaderGif: "---大当たり（Gif）---", DiscordHeaderIllustration: "---当たり（イラスト）---"} }
+func defaultSettings() Settings {
+    return Settings{
+        EventJSONLog: false,
+        AutoServe: true,
+        ServerPort: 3010,
+        DiscordEnabled: true,
+        DiscordNewMessagePerSession: true,
+        DiscordArchiveOldSummary: true,
+        DiscordArchiveLabel: "アーカイブ",
+        DiscordTitle: "集計（最新）",
+        DiscordEmojiDone: "✅",
+        DiscordEmojiProgress: "🎨",
+        DiscordEmojiNone: "⏳",
+        DiscordHeaderGif: "---大当たり（Gif）---",
+        DiscordHeaderIllustration: "---当たり（イラスト）---",
+        DiscordRefLabelYes: "参考画像あり",
+        DiscordRefLabelNo:  "参考画像なし",
+    }
+}
 
 func ensureSettingsExists(base string) error {
     p := settingsPath(base)
@@ -1093,6 +1186,14 @@ func ensureSettingsUpgraded(base string) error {
         raw["discordHeaderIllustration"] = "---当たり（イラスト）---"
         changed = true
     }
+    if _, ok := raw["discordRefLabelYes"]; !ok {
+        raw["discordRefLabelYes"] = "参考画像あり"
+        changed = true
+    }
+    if _, ok := raw["discordRefLabelNo"]; !ok {
+        raw["discordRefLabelNo"] = "参考画像なし"
+        changed = true
+    }
     if changed {
         nb, err := json.MarshalIndent(raw, "", "  ")
         if err != nil { return err }
@@ -1118,6 +1219,8 @@ func migrateCurrentJSON(base string) error {
             if pv, ok := m["present"].(string); ok {
                 if pv == "イラスト" { m["present"] = "Illustration"; changed = true }
             }
+            // ensure hasReference exists (default false)
+            if _, ok := m["hasReference"]; !ok { m["hasReference"] = false; changed = true }
         }
     }
     if changed {
