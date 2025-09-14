@@ -1,5 +1,5 @@
 Param(
-  [string]$OutDir = "dist",
+  [string]$OutDir = "app",
   [switch]$WithVersion
 )
 
@@ -42,11 +42,15 @@ $curJson = Join-Path $stage 'data/current.json'
 $stateObj = @{ users = @(); updatedAt = (Get-Date).ToUniversalTime().ToString('o') }
 $stateObj | ConvertTo-Json | Set-Content -LiteralPath $curJson -Encoding UTF8
 
-# seed settings: setting.json (root)
-$setJson = Join-Path $stage 'setting.json'
-$settingsObj = @{ eventJsonLog = $false; autoServe = $true; serverPort = 3010 }
-$settingsObj.discordEnabled = $true
-$settingsObj | ConvertTo-Json | Set-Content -LiteralPath $setJson -Encoding UTF8
+# seed settings: setting.json（ルートの現行設定をそのまま採用）
+$rootSetting = Join-Path $Root 'setting.json'
+if (Test-Path $rootSetting) {
+  Copy-Item -LiteralPath $rootSetting -Destination (Join-Path $stage 'setting.json') -Force
+} else {
+  # フォールバック: 最低限の既定値を埋める（rootにsetting.jsonが無い場合）
+  $settingsObj = @{ eventJsonLog = $false; autoServe = $true; serverPort = 3010; discordEnabled = $true }
+  $settingsObj | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $stage 'setting.json') -Encoding UTF8
+}
 
 $scriptOut = Join-Path $stage 'scripts'
 New-Item -ItemType Directory -Force -Path $scriptOut | Out-Null

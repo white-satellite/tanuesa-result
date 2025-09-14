@@ -438,7 +438,7 @@
     }
   </style>
   <script>
-    const STATE = { refreshMs: 4000, refreshTimer: null, paused: false, sortKey: 'order', sortDir: 'asc', query: '', view: 'current', backups: [], backupData: null, backupName: '' };
+    const STATE = { refreshMs: 4000, refreshTimer: null, paused: false, sortKey: 'order', sortDir: 'asc', query: '', view: 'current', backups: [], backupData: null, backupName: '', augmentedOnce: false, cfg: { emojiNone: '⏳', emojiProgress: '🎨', emojiDone: '✅', refLabelYes: '参考画像あり', refLabelNo: '参考画像なし' } };
 
     const Theme = {
       load(){ return localStorage.getItem('theme') || 'auto'; },
@@ -460,6 +460,7 @@
       // Remove previous script tag to avoid leaking
       const old = document.getElementById('dataScript'); if(old) old.remove();
       delete window.__GACHA_DATA__;
+      STATE.augmentedOnce = false;
       const s = document.createElement('script');
       s.id = 'dataScript';
       s.src = `../data/data.js?cb=${Date.now()}`;
@@ -477,6 +478,22 @@
       s.onload = ()=>{ STATE.backups = Array.isArray(window.__GACHA_BACKUPS__) ? window.__GACHA_BACKUPS__ : []; populateBackupSelect(); };
       s.onerror = ()=>{ console.warn('backups/index.js not found'); STATE.backups = []; populateBackupSelect(); };
       document.head.appendChild(s);
+    }
+
+    function loadSettings(){
+      try {
+        fetch('http://127.0.0.1:3010/api/settings').then(r=>r.ok?r.json():null).then(js=>{
+          if(js){
+            STATE.cfg.emojiNone = js.emojiNone || STATE.cfg.emojiNone;
+            STATE.cfg.emojiProgress = js.emojiProgress || STATE.cfg.emojiProgress;
+            STATE.cfg.emojiDone = js.emojiDone || STATE.cfg.emojiDone;
+            STATE.cfg.refLabelYes = js.refLabelYes || STATE.cfg.refLabelYes;
+            STATE.cfg.refLabelNo = js.refLabelNo || STATE.cfg.refLabelNo;
+            // 再描画
+            if (document.getElementById('dataScript')) render();
+          }
+        }).catch(()=>{});
+      } catch(_e) {}
     }
 
     function populateBackupSelect(){
@@ -509,6 +526,25 @@
 
     function render(){
       const base = (STATE.view==='backup' && STATE.backupData) ? STATE.backupData : (window.__GACHA_DATA__ || { users: [], updatedAt: null });
+      // 互換: data.js に hasReference がない環境では API/state で補完（1回だけ試行）
+      if (!STATE.augmentedOnce && base && Array.isArray(base.users) && base.users.some(u=> typeof u.hasReference === 'undefined')) {
+        STATE.augmentedOnce = true;
+        try {
+          fetch('http://127.0.0.1:3010/api/state').then(r=>r.ok?r.json():null).then(js=>{
+            if(js && Array.isArray(js.users)){
+              const map = Object.create(null);
+              for(const u of js.users){ map[String(u.name)] = !!u.hasReference; }
+              if(Array.isArray(base.users)){
+                for(const u of base.users){ if (typeof u.hasReference === 'undefined') u.hasReference = !!map[String(u.name)]; }
+                // 再描画
+                window.__GACHA_DATA__ = base; // 反映
+                render();
+                return;
+              }
+            }
+          }).catch(()=>{});
+        } catch(_e) {}
+      }
       document.querySelector('#updated').textContent = base.updatedAt ? new Date(base.updatedAt).toLocaleString() : '-';
       const summary = computeSummary(base);
       const su = document.querySelector('#sumUsers'); if (su) su.textContent = summary.users;
@@ -560,6 +596,9 @@
         const td = document.createElement('td'); td.colSpan=7; td.className='empty'; td.innerHTML='<i class="fas fa-inbox"></i><br>データがありません'; tr.appendChild(td); tbody.appendChild(tr);
         return;
       }
+      const eNone = STATE.cfg.emojiNone || '⏳';
+      const eProg = STATE.cfg.emojiProgress || '🎨';
+      const eDone = STATE.cfg.emojiDone || '✅';
       for(const u of users){
         const tr = document.createElement('tr');
         const st = (u.status||'').toLowerCase();
@@ -571,10 +610,10 @@
         tr.innerHTML = `
           <td class="num right">${u.order||''}</td>
           <td class="center">
-            <select class="statusSel" data-name="${escapeHtml(u.name)}">
-              <option value="none" ${(!doneCk&&!progCk)?'selected':''}>⚪ 未</option>
-              <option value="progress" ${(progCk)?'selected':''}>🎨 進行中</option>
-              <option value="done" ${(doneCk)?'selected':''}>✅ 完了</option>
+            <select class="statusSel" data-name="${escapeHtml(u.name)}" id="${safeId('status-'+u.name)}" name="status-${escapeHtml(u.name)}">
+              <option value="none" ${(!doneCk&&!progCk)?'selected':''}>${eNone} 未</option>
+              <option value="progress" ${(progCk)?'selected':''}>${eProg} 進行中</option>
+              <option value="done" ${(doneCk)?'selected':''}>${eDone} 完了</option>
             </select>
           </td>
           <td class="left">${escapeHtml(u.name)}</td>
@@ -582,7 +621,7 @@
           <td class="num right">${u.jackpot|0}</td>
           <td class="center col-present">${(()=>{ const p=u.present|| (u?.flags?.gif?'Gif':(u?.flags?.illust?'Illustration':'')); if(p==='Gif') return '<span class="badge ok"><i class="fas fa-video"></i> Gif</span>'; if(p==='Illustration') return '<span class="badge illustration"><i class="fas fa-image"></i> イラスト</span>'; return '<span class="badge no"><i class="fas fa-minus"></i></span>'; })()}</td>
           <td class="center col-ref">
-            <input type="checkbox" class="ref-checkbox" data-name="${escapeHtml(u.name)}" ${hasRef?'checked':''} />
+            <input type="checkbox" class="ref-checkbox" data-name="${escapeHtml(u.name)}" id="${safeId('ref-'+u.name)}" name="ref-${escapeHtml(u.name)}" ${hasRef?'checked':''} />
           </td>`;
         tbody.appendChild(tr);
       }
@@ -621,6 +660,7 @@
     }
 
     function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]))}
+    function safeId(s){return 'id-' + String(s).toLowerCase().replace(/[^a-z0-9_-]+/gi,'-').replace(/^-+|-+$/g,'');}
 
     function updateSort(key){
       if(STATE.sortKey===key){ STATE.sortDir = (STATE.sortDir==='asc')? 'desc':'asc'; }
@@ -689,6 +729,7 @@
           });
         }
       }
+      loadSettings();
       loadData(); loadBackupList(); startAuto();
       window.addEventListener('resize', adjustTableMaxHeight);
     });
