@@ -34,7 +34,6 @@ app\gacha-windows-x64.zip
 <br>
 
 **Discord通知設定**
-- `.env.example`を`.env.local`にリネーム
 - `.env.local`ファイルの以下の項目にDiscordのチャンネルのWebhookリンクを貼る
 
 例
