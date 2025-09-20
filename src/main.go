@@ -100,6 +100,27 @@ type DiscordMessage struct {
     Embeds  []DiscordEmbed `json:"embeds,omitempty"`
 }
 
+// Escape Discord markdown meta characters to avoid unintended formatting
+// Escapes: \ * _ ~ ` > | ( ) [ ]
+var discordMarkdownEscaper = strings.NewReplacer(
+    "\\", "\\\\",
+    "*", "\\*",
+    "_", "\\_",
+    "~", "\\~",
+    "`", "\\`",
+    ">", "\\>",
+    "|", "\\|",
+    "(", "\\(",
+    ")", "\\)",
+    "[", "\\[",
+    "]", "\\]",
+)
+
+func escapeDiscordMarkdown(s string) string {
+    if s == "" { return s }
+    return discordMarkdownEscaper.Replace(s)
+}
+
 func main() {
     base := baseDir()
     // Load .env.local if present (simple dotenv)
@@ -879,18 +900,21 @@ func buildLatestSummaryEmbed(st State, cfg Settings) DiscordEmbed {
         if no == "" { no = "参考画像なし" }
         refTag := "[" + no + "]"
         if u.HasReference { refTag = "[" + yes + "]" }
+        // Escape user-visible fragments to avoid Discord markdown effects
+        safeRef := escapeDiscordMarkdown(refTag)
+        safeName := escapeDiscordMarkdown(u.Name)
 
         if present == "Gif" {
             prefix := eNone + " "
             if u.Status == "progress" { prefix = eProg + " " }
             if u.Done || u.Status == "done" { prefix = eDone + " " }
-            line := prefix + refTag + " " + u.Name
+            line := prefix + safeRef + " " + safeName
             gifs = append(gifs, line)
         } else if present == "Illustration" {
             prefix := eNone + " "
             if u.Status == "progress" { prefix = eProg + " " }
             if u.Done || u.Status == "done" { prefix = eDone + " " }
-            line := prefix + refTag + " " + u.Name
+            line := prefix + safeRef + " " + safeName
             ilsts = append(ilsts, line)
         }
     }
@@ -900,21 +924,22 @@ func buildLatestSummaryEmbed(st State, cfg Settings) DiscordEmbed {
     if strings.TrimSpace(gh) == "" { gh = "---大当たり（Gif）---" }
     ih := cfg.DiscordHeaderIllustration
     if strings.TrimSpace(ih) == "" { ih = "---当たり（イラスト）---" }
-    fieldGif := EmbedField{Name: gh, Value: "なし", Inline: false}
-    fieldIlst := EmbedField{Name: ih, Value: "なし", Inline: false}
+    fieldGif := EmbedField{Name: escapeDiscordMarkdown(gh), Value: "なし", Inline: false}
+    fieldIlst := EmbedField{Name: escapeDiscordMarkdown(ih), Value: "なし", Inline: false}
     if len(gifs) > 0 { fieldGif.Value = strings.Join(gifs, "\n") }
     if len(ilsts) > 0 { fieldIlst.Value = strings.Join(ilsts, "\n") }
     // Tailwind emerald-500
     green := 0x10B981
     title := cfg.DiscordTitle
     if strings.TrimSpace(title) == "" { title = "集計（最新）" }
+    title = escapeDiscordMarkdown(title)
     ts := st.UpdatedAt
     return DiscordEmbed{
         Title: title,
         Color: green,
         Fields: []EmbedField{fieldGif, fieldIlst},
         Timestamp: ts,
-        Footer: &EmbedFooter{Text: "最終更新"},
+        Footer: &EmbedFooter{Text: escapeDiscordMarkdown("最終更新")},
     }
 }
 
